@@ -3,181 +3,161 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Simple Web Whiteboard</title>
+    <title>Infinite Whiteboard</title>
     <style>
-        :root {
-            --bg-color: #f0f0f0;
-            --toolbar-bg: #333;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden; /* Prevents scrolling while drawing */
-            font-family: sans-serif;
-            background-color: var(--bg-color);
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-
-        /* Toolbar Styling */
+        :root { --toolbar-bg: #222; --accent: #007bff; }
+        body { margin: 0; overflow: hidden; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; background: #e5e5e5; }
+        
         #toolbar {
             background: var(--toolbar-bg);
             padding: 10px;
             display: flex;
             gap: 15px;
-            align-items: center;
             justify-content: center;
+            align-items: center;
             color: white;
             z-index: 10;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         }
 
-        .group {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            border-right: 1px solid #555;
-            padding-right: 15px;
-        }
-
-        .group:last-child { border-right: none; }
-
-        /* Buttons and Inputs */
-        button {
-            padding: 8px 12px;
-            cursor: pointer;
-            border: none;
-            border-radius: 4px;
-            background: #555;
-            color: white;
-            transition: 0.2s;
-        }
-
-        button:hover { background: #777; }
-        button.active { background: #007bff; }
-
-        input[type="color"] {
-            cursor: pointer;
-            border: none;
-            width: 40px;
-            height: 40px;
-            background: none;
-        }
-
-        /* Canvas */
-        canvas {
-            flex-grow: 1;
-            background: white;
-            touch-action: none; /* Crucial for Promethean/Touch support */
-            cursor: crosshair;
-        }
+        button { padding: 8px 12px; cursor: pointer; border: none; border-radius: 4px; background: #444; color: white; }
+        button.active { background: var(--accent); }
+        .group { display: flex; gap: 8px; align-items: center; border-right: 1px solid #444; padding-right: 12px; }
+        
+        canvas { flex-grow: 1; background: white; touch-action: none; cursor: crosshair; }
+        #coords { position: fixed; bottom: 10px; right: 10px; font-size: 12px; color: #666; pointer-events: none; }
     </style>
 </head>
 <body>
 
 <div id="toolbar">
-    <!-- Color Picker -->
     <div class="group">
-        <label>Ink:</label>
         <input type="color" id="colorPicker" value="#000000">
-        <button onclick="setEraser()">Eraser</button>
+        <button id="panBtn" onclick="togglePanMode()">🖐️ Pan Mode</button>
     </div>
-
-    <!-- Preset Sizes -->
     <div class="group">
-        <button class="size-btn" onclick="setSize(2, this)">Thin</button>
-        <button class="size-btn active" onclick="setSize(6, this)">Medium</button>
-        <button class="size-btn" onclick="setSize(12, this)">Thick</button>
+        <button onclick="setSize(3)">Thin</button>
+        <button class="active" onclick="setSize(8)">Med</button>
+        <button onclick="setSize(18)">Thick</button>
     </div>
-
-    <!-- Actions -->
     <div class="group">
-        <button onclick="clearCanvas()" style="background: #dc3545;">Clear All</button>
+        <button onclick="saveImage()" style="background: #28a745;">💾 Save View</button>
+        <button onclick="clearCanvas()" style="background: #dc3545;">Reset</button>
     </div>
+    <span style="font-size: 0.8em; opacity: 0.7;">Drag with 2 fingers or Right-Click to move</span>
 </div>
 
 <canvas id="whiteboard"></canvas>
+<div id="coords">Offset: 0, 0</div>
 
 <script>
     const canvas = document.getElementById('whiteboard');
     const ctx = canvas.getContext('2d');
-    const colorPicker = document.getElementById('colorPicker');
     
-    let drawing = false;
-    let thickness = 6;
+    let paths = []; // Stores all drawings
+    let currentPath = null;
+    let offset = { x: 0, y: 0 };
+    let isPanning = false;
+    let isDrawing = false;
+    let panMode = false;
+    let thickness = 8;
     let color = '#000000';
 
-    // Resize canvas to fit window
-    function resizeCanvas() {
+    function resize() {
         canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight - document.getElementById('toolbar').offsetHeight;
-        // Resetting width clears the canvas, so we set line properties again
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+        canvas.height = window.innerHeight - 70;
+        redraw();
     }
 
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
+    window.addEventListener('resize', resize);
+    resize();
 
-    // Brush Settings
-    function setSize(size, el) {
-        thickness = size;
-        document.querySelectorAll('.size-btn').forEach(btn => btn.classList.remove('active'));
-        el.classList.add('active');
+    function setSize(s) { thickness = s; }
+    function togglePanMode() {
+        panMode = !panMode;
+        document.getElementById('panBtn').classList.toggle('active');
+        canvas.style.cursor = panMode ? 'grab' : 'crosshair';
     }
 
-    function setEraser() {
-        colorPicker.value = "#ffffff";
-        color = "#ffffff";
+    // Logic to redraw everything based on current pan offset
+    function redraw() {
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        paths.forEach(path => {
+            ctx.beginPath();
+            ctx.lineWidth = path.width;
+            ctx.strokeStyle = path.color;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            path.points.forEach((pt, i) => {
+                const x = pt.x + offset.x;
+                const y = pt.y + offset.y;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        });
+        document.getElementById('coords').innerText = `Offset: ${Math.round(offset.x)}, ${Math.round(offset.y)}`;
     }
 
-    colorPicker.addEventListener('input', (e) => {
-        color = e.target.value;
+    canvas.addEventListener('pointerdown', e => {
+        // Pan if Right Click (button 2) or if Pan Mode is on
+        if (e.button === 2 || panMode) {
+            isPanning = true;
+        } else {
+            isDrawing = true;
+            currentPath = { color: color, width: thickness, points: [] };
+            paths.push(currentPath);
+            addPoint(e);
+        }
     });
 
-    // Drawing Logic (Pointer Events work for Mouse, Pen, and Touch)
-    function startDrawing(e) {
-        drawing = true;
-        draw(e); 
-    }
+    window.addEventListener('pointermove', e => {
+        if (isPanning) {
+            offset.x += e.movementX;
+            offset.y += e.movementY;
+            redraw();
+        } else if (isDrawing) {
+            addPoint(e);
+            redraw();
+        }
+    });
 
-    function stopDrawing() {
-        drawing = false;
-        ctx.beginPath(); // Resets path so lines don't connect weirdly
-    }
+    window.addEventListener('pointerup', () => {
+        isDrawing = false;
+        isPanning = false;
+    });
 
-    function draw(e) {
-        if (!drawing) return;
+    // Prevent context menu on right-click so we can use it for panning
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-        ctx.lineWidth = thickness;
-        ctx.strokeStyle = color;
-
-        // Uses clientX/Y and offsets for the toolbar height
+    function addPoint(e) {
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        currentPath.points.push({
+            x: e.clientX - rect.left - offset.x,
+            y: e.clientY - rect.top - offset.y
+        });
+    }
 
-        ctx.lineTo(x, y);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x, y);
+    function saveImage() {
+        const link = document.createElement('a');
+        link.download = 'whiteboard-export.png';
+        link.href = canvas.toDataURL();
+        link.click();
     }
 
     function clearCanvas() {
-        if(confirm("Clear the entire board?")) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if(confirm("Delete everything?")) {
+            paths = [];
+            offset = { x: 0, y: 0 };
+            redraw();
         }
     }
 
-    // Event Listeners
-    canvas.addEventListener('pointerdown', startDrawing);
-    canvas.addEventListener('pointermove', draw);
-    canvas.addEventListener('pointerup', stopDrawing);
-    canvas.addEventListener('pointerout', stopDrawing);
+    document.getElementById('colorPicker').oninput = (e) => color = e.target.value;
 
 </script>
-
 </body>
 </html>
